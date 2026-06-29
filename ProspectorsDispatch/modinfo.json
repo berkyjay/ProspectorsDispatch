@@ -1,0 +1,15 @@
+{
+    "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
+    "type": "Code",
+    "modid": "prospectorsdispatch",
+    "name": "Prospector's Dispatch",
+    "authors": [
+        "Berkyjay"
+    ],
+    "description": "Buy resource-location leads from traders, recorded in your journal.",
+    "version": "1.0.0",
+    "dependencies": {
+        "game": "1.22.0",
+        "survival": ""
+    }
+}
