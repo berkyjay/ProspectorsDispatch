@@ -8,6 +8,10 @@
   data automatically.
 - Ores that PD doesn't have a curated rarity for now show an honest "traces detected"
   note instead of a placeholder, while still giving the direction, distance, and vein size.
+- Fixed: in single-player, buying a dispatch charged the player twice. (Introduced in
+  1.0.1, which applied its trader fix once per side in the shared single-player process.)
+- Fixed: long dispatch entries no longer run underneath the journal's page buttons — the
+  text now pages cleanly.
 
 ## 1.0.1
 

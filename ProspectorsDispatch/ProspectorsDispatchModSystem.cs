@@ -12,7 +12,12 @@ public class ProspectorsDispatchModSystem : ModSystem
     private const string ConfigFilename = "ProspectorsDispatch.json";
 
     private readonly OreMapSampler sampler = new OreMapSampler();
-    private Harmony? harmony;
+
+    // STATIC: Harmony patches are process-global, and in single-player the client and server each get
+    // their own ModSystem instance in the ONE shared process, so Start() runs twice. A per-instance field
+    // let both instances patch, applying every postfix twice — which double-fired the purchase handler and
+    // charged the player twice. A static handle patches the process exactly once, covering both sides.
+    private static Harmony? harmony;
 
     /// <summary>Server-side ore-map sampler, used by the dialogue handler to build readings.</summary>
     public OreMapSampler Sampler => sampler;

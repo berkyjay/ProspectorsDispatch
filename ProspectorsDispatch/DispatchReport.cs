@@ -30,6 +30,14 @@ public static class DispatchReport
     // pushes players to seek out other traders for leads on everything else.
     public const int MaxEntries = 5;
 
+    // Force a journal page break after this many entries. The native journal (GuiDialogJournal.Paginate)
+    // estimates page height by measuring the raw VTML-tagged text with a plain font, which does not match
+    // the formatted, wrapped render — so a full page overshoots the text area and the last lines end up
+    // hidden behind the page buttons. Emitting the journal's own ___NEWPAGE___ token caps each page well
+    // short of that, sidestepping the miscalculation.
+    private const int EntriesPerPage = 3;
+    private const string PageBreak = "___NEWPAGE___";
+
     private static readonly string[] Dir8 =
         { "north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west" };
     private static readonly string[] Dir4 = { "north", "east", "south", "west" };
@@ -76,8 +84,12 @@ public static class DispatchReport
             return (title, sb.ToString().TrimEnd());
         }
 
+        int shown = 0;
         foreach (var (code, r) in hits)
         {
+            if (shown > 0 && shown % EntriesPerPage == 0) sb.AppendLine(PageBreak);
+            shown++;
+
             string name = LocalizedName(code);
             string aside = Aside(sampler, code);
 
