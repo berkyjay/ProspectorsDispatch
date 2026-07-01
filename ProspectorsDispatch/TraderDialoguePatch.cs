@@ -111,10 +111,26 @@ public static class TraderDialogueInjectPatch
 
         result.components = result.components.Concat(added).ToArray();
 
-        // CRITICAL: loadDialogue already ran Init() (which assigns each answer option a unique Id) before
-        // this postfix added components — so our options would all keep Id 0 and every click would select
-        // the first option. Re-run Init() to assign Ids to the new options (the controller isn't built yet).
-        result.Init();
+        // Assign Ids to ONLY the newly-injected answer options, continuing past the highest existing Id.
+        //
+        // We must NOT call result.Init() here. DialogueConfig.Init() renumbers EVERY option from a counter
+        // that loadDialogue already advanced, so it would shift the vanilla options' Ids. The client and the
+        // server load and Init the dialogue independently and exchange the selected option purely by Id
+        // (DlgTalkComponent.SelectAnswerById), so shifting the vanilla Ids on one side desyncs every menu
+        // pick — including vanilla "I would like to trade" — and the player can no longer buy or sell.
+        // Leaving the vanilla Ids untouched keeps the trade path aligned regardless of side/config skew.
+        int nextId = result.components
+            .OfType<DlgTalkComponent>()
+            .SelectMany(c => c.Text ?? Enumerable.Empty<DialogeTextElement>())
+            .Select(e => e.Id)
+            .DefaultIfEmpty(-1)
+            .Max() + 1;
+
+        main.Text[^1].Id = nextId++; // the "ask about deposits" option we appended above
+        foreach (var comp in added.OfType<DlgTalkComponent>())
+        {
+            foreach (var el in comp.Text) el.Id = nextId++;
+        }
         return true;
     }
 
