@@ -91,6 +91,29 @@ public static class ResourceCatalog
     public static ResourceEntry? Get(string code) =>
         ByCode.TryGetValue(code, out var entry) ? entry : null;
 
+    /// <summary>
+    /// The dispatch category for a resource. A curated entry wins (so gold/silver stay Ores and
+    /// peridot/lapis stay Gems regardless of their worldgen folder); otherwise the category is derived
+    /// from the deposit's source folder, which lets ores added by other mods be picked up automatically.
+    /// Null if it can't be classified — the resource is then simply not offered.
+    /// </summary>
+    public static ResourceCategory? CategoryOf(string code, string? fromFile) =>
+        ByCode.TryGetValue(code, out var entry) ? entry.Category : CategoryFromFile(fromFile);
+
+    // Vanilla and most mods lay deposits out under worldgen/deposits/{metalore,mineralore,gem}/ (coal
+    // sits at the top of the deposits folder). Order matters: match the specific ore folders before the
+    // generic "coal" fallback.
+    private static ResourceCategory? CategoryFromFile(string? fromFile)
+    {
+        if (string.IsNullOrEmpty(fromFile)) return null;
+        string f = fromFile.ToLowerInvariant();
+        if (f.Contains("mineralore")) return ResourceCategory.Minerals;
+        if (f.Contains("metalore")) return ResourceCategory.Ores;
+        if (f.Contains("gem")) return ResourceCategory.Gems;
+        if (f.Contains("coal")) return ResourceCategory.Ores;
+        return null;
+    }
+
     public static IEnumerable<string> CodesIn(ResourceCategory category) =>
         Entries.Where(e => e.Category == category).Select(e => e.Code);
 

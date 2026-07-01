@@ -55,11 +55,12 @@ public class OreMapSampler
 
     private GenDeposits? genDeposits;
     private readonly Dictionary<string, VeinSize> veinByCode = new();
+    private readonly Dictionary<string, ResourceCategory> categoryByCode = new();
 
     public void Init(ICoreServerAPI api)
     {
         genDeposits = api.ModLoader.GetModSystem<GenDeposits>();
-        RecordVeinSizes();
+        RecordDeposits();
     }
 
     /// <summary>True once the deposit system is available and initialized.</summary>
@@ -68,28 +69,51 @@ public class OreMapSampler
     /// <summary>The (static, data-derived) vein size of a resource, or null if unknown.</summary>
     public VeinSize? VeinSizeOf(string code) => veinByCode.TryGetValue(code, out var v) ? v : null;
 
-    // Derive vein size from each deposit's worldgen radius.avg (the size of one deposit blob). Unlike
-    // rarity, this is honest real data: iron radius ~26 (large masses) vs diamond ~2 (scattered specks).
-    private void RecordVeinSizes()
+    /// <summary>
+    /// Resources discovered at runtime that fall into the given dispatch category. Driven by the
+    /// deposits actually present, so ores added by other mods are covered automatically (categorized
+    /// from their worldgen folder; see <see cref="ResourceCatalog.CategoryOf"/>).
+    /// </summary>
+    public IEnumerable<string> CodesInCategory(ResourceCategory category)
+    {
+        foreach (var kv in categoryByCode)
+            if (kv.Value == category) yield return kv.Key;
+    }
+
+    // One pass over every ore-map deposit, recording per resource code: (a) its dispatch category and
+    // (b) its vein size, derived from the deposit's worldgen radius.avg (iron radius ~26 = large masses
+    // vs diamond ~2 = scattered specks — honest real data, unlike rarity). Category is recorded even
+    // when a deposit carries no radius, so such a resource is still offered. First deposit per code wins.
+    private void RecordDeposits()
     {
         veinByCode.Clear();
+        categoryByCode.Clear();
         var deposits = genDeposits?.Deposits;
         if (deposits == null) return;
         foreach (var dep in deposits)
         {
-            RecordVein(dep);
+            Record(dep, dep.fromFile);
             if (dep.ChildDeposits == null) continue;
-            foreach (var child in dep.ChildDeposits) RecordVein(child);
+            // Child deposits are defined inline in the parent's file, so inherit its source path.
+            foreach (var child in dep.ChildDeposits) Record(child, dep.fromFile);
         }
     }
 
-    private void RecordVein(DepositVariant dep)
+    private void Record(DepositVariant dep, string? sourceFile)
     {
-        if (!dep.WithOreMap || dep.Code == null || dep.Attributes == null) return;
-        if (veinByCode.ContainsKey(dep.Code)) return; // first (main) deposit per code wins
-        float radiusAvg = dep.Attributes["radius"]["avg"].AsFloat(0f);
-        if (radiusAvg <= 0f) return;
-        veinByCode[dep.Code] = ClassifyVein(radiusAvg);
+        if (!dep.WithOreMap || dep.Code == null) return;
+
+        if (!categoryByCode.ContainsKey(dep.Code))
+        {
+            ResourceCategory? category = ResourceCatalog.CategoryOf(dep.Code, dep.fromFile ?? sourceFile);
+            if (category.HasValue) categoryByCode[dep.Code] = category.Value;
+        }
+
+        if (!veinByCode.ContainsKey(dep.Code) && dep.Attributes != null)
+        {
+            float radiusAvg = dep.Attributes["radius"]["avg"].AsFloat(0f);
+            if (radiusAvg > 0f) veinByCode[dep.Code] = ClassifyVein(radiusAvg);
+        }
     }
 
     private static VeinSize ClassifyVein(float radiusAvg)

@@ -205,9 +205,8 @@ public static class TraderDialogueTriggerPatch
         var pos = trader.Pos.AsBlockPos;
 
         // Don't charge for a category with nothing in range — the trader simply has no word to share.
-        bool anyInRange = ResourceCatalog.All
-            .Where(e => e.Category == category)
-            .Any(e => sampler.Sample(e.Code, pos.X, pos.Z, config.SearchRadius).Found);
+        bool anyInRange = sampler.CodesInCategory(category)
+            .Any(code => sampler.Sample(code, pos.X, pos.Z, config.SearchRadius).Found);
         if (!anyInRange)
         {
             player.SendMessage(GlobalConstants.GeneralChatGroup,

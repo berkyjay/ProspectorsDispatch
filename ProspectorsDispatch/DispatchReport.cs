@@ -55,7 +55,7 @@ public static class DispatchReport
 
         // Gather what's findable, then keep only the nearest few.
         var hits = new List<(string code, OreReading r)>();
-        foreach (var code in ResourceCatalog.CodesIn(category))
+        foreach (var code in sampler.CodesInCategory(category))
         {
             OreReading r = sampler.Sample(code, originX, originZ, radius);
             if (r.Found) hits.Add((code, r));
@@ -79,19 +79,18 @@ public static class DispatchReport
         foreach (var (code, r) in hits)
         {
             string name = LocalizedName(code);
-            string rarity = ResourceCatalog.Get(code)?.Rarity.ToString().ToLowerInvariant() ?? "common";
-            string vein = VeinWords[VeinIndex(sampler, code)];
+            string aside = Aside(sampler, code);
 
             if (tier == DispatchTier.Survey)
             {
                 string dir = Dir8[r.OctantIndex];
                 int paces = RoundPaces(r.DistanceBlocks);
-                sb.AppendLine($"<strong>{name}</strong>: roughly <strong>{paces:N0} paces</strong> to the <strong>{dir}</strong>. <i>({rarity}, in {vein})</i>");
+                sb.AppendLine($"<strong>{name}</strong>: roughly <strong>{paces:N0} paces</strong> to the <strong>{dir}</strong>. <i>{aside}</i>");
             }
             else
             {
                 string dir = Dir4[Cardinal4(r.BearingDeg)];
-                sb.AppendLine($"<strong>{name}</strong>: somewhere to the <strong>{dir}</strong>. <i>({rarity}, in {vein})</i>");
+                sb.AppendLine($"<strong>{name}</strong>: somewhere to the <strong>{dir}</strong>. <i>{aside}</i>");
             }
 
             sb.AppendLine(); // blank line between entries for readability
@@ -107,10 +106,25 @@ public static class DispatchReport
         return c < 0 ? c + 4 : c;
     }
 
-    private static int VeinIndex(OreMapSampler sampler, string code)
+    // The italic aside: "(rarity, in vein)" when both are known. Rarity is curated and has no honest
+    // automatic source (see ResourceCatalog), so a resource with no curated entry — e.g. one added by
+    // another mod — gets an honest hearsay fallback rather than a fabricated rarity, keeping its real
+    // vein descriptor when we have it.
+    private static string Aside(OreMapSampler sampler, string code)
     {
-        VeinSize? v = sampler.VeinSizeOf(code);
-        return v.HasValue ? (int)v.Value : (int)VeinSize.Sizable;
+        VeinSize? vein = sampler.VeinSizeOf(code);
+        string? veinWords = vein.HasValue ? VeinWords[(int)vein.Value] : null;
+
+        ResourceEntry? entry = ResourceCatalog.Get(code);
+        if (entry != null)
+        {
+            string rarity = entry.Rarity.ToString().ToLowerInvariant();
+            return veinWords != null ? $"({rarity}, in {veinWords})" : $"({rarity})";
+        }
+
+        return veinWords != null
+            ? $"(traces detected — worth uncertain, in {veinWords})"
+            : "(traces detected, extent uncertain)";
     }
 
     private static string LocalizedName(string code)
