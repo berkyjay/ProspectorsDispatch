@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.0
+
+- Interesting Ore Gen compatibility: with IOG installed, traders now sell directions to
+  IOG's hydrothermal mining districts ("Rich mining grounds") instead of the vanilla
+  ore-map dispatches, which IOG's worldgen makes meaningless. District dispatches name
+  the grounds' kind, heading, distance (Survey tier) and the ores they carry.
+- New: the Prospector's Primer (IOG worlds) - a cheap one-time purchase recording which
+  rock types host which scattered ores, including where the top "bountiful" grade forms.
+- Traders now keep books: a dispatch you've already bought disappears from that trader's
+  menu (buying a Survey also retires the lesser Rumour), and a stale purchase attempt is
+  politely refused instead of charged. A Rumour can no longer overwrite a better Survey
+  in your journal.
+- Each trader has heard of their own subset of the mining districts in range (nearest
+  always known), so visiting multiple traders is worth it. Configurable via
+  DistrictKnowledgeChance.
+- District dispatches list the nearest grounds of each kind, so a far-but-unique
+  district type is never crowded out by closer ones.
+- Journal entry titles now lead with the trader's coordinates so entries are
+  distinguishable in the journal list.
+- Text cleanup: clearer district ore names (no more duplicate "Quartz" entries) and
+  punctuation fixes throughout.
+
 ## 1.1.0
 
 - Dispatches now cover any ore that uses the game's ore-distribution maps, including

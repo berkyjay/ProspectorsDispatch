@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Vintagestory.API.Server;
 using Vintagestory.ServerMods;
 
@@ -45,7 +46,7 @@ public enum VeinSize
 /// <c>DepositVariant.GetOreMapFactor</c>, which reads the cached per-region map and returns 0 for
 /// regions that have not been generated yet.)
 ///
-/// Server-side only — the deposit/worldgen systems live on the server.
+/// Server-side only - the deposit/worldgen systems live on the server.
 /// </summary>
 public class OreMapSampler
 {
@@ -56,6 +57,11 @@ public class OreMapSampler
     private GenDeposits? genDeposits;
     private readonly Dictionary<string, VeinSize> veinByCode = new();
     private readonly Dictionary<string, ResourceCategory> categoryByCode = new();
+
+    // Scatter lore (for the prospector's primer): per ore code, which rock types actively host it
+    // (deposit variants with TriesPerChunk > 0), and in which rocks the top "bountiful" grade can form.
+    private readonly Dictionary<string, HashSet<string>> hostRocksByCode = new();
+    private readonly Dictionary<string, HashSet<string>> bountifulRocksByCode = new();
 
     public void Init(ICoreServerAPI api)
     {
@@ -82,7 +88,7 @@ public class OreMapSampler
 
     // One pass over every ore-map deposit, recording per resource code: (a) its dispatch category and
     // (b) its vein size, derived from the deposit's worldgen radius.avg (iron radius ~26 = large masses
-    // vs diamond ~2 = scattered specks — honest real data, unlike rarity). Category is recorded even
+    // vs diamond ~2 = scattered specks - honest real data, unlike rarity). Category is recorded even
     // when a deposit carries no radius, so such a resource is still offered. First deposit per code wins.
     private void RecordDeposits()
     {
@@ -99,8 +105,23 @@ public class OreMapSampler
         }
     }
 
+    /// <summary>
+    /// The rocks that actively host an ore's scatter/vein deposits, and (second set) the rocks where its
+    /// top "bountiful" grade can form. Ordered lists for stable rendering. Empty when unknown.
+    /// </summary>
+    public (List<string> Rocks, HashSet<string> Bountiful) HostRocksOf(string code)
+    {
+        var rocks = hostRocksByCode.TryGetValue(code, out var r) ? r.OrderBy(x => x).ToList() : new List<string>();
+        var bounty = bountifulRocksByCode.TryGetValue(code, out var b) ? b : new HashSet<string>();
+        return (rocks, bounty);
+    }
+
+    /// <summary>All ore codes with recorded host-rock lore, i.e. everything the primer can speak of.</summary>
+    public IEnumerable<string> ScatterLoreCodes() => hostRocksByCode.Keys;
+
     private void Record(DepositVariant dep, string? sourceFile)
     {
+        RecordScatterLore(dep);
         if (!dep.WithOreMap || dep.Code == null) return;
 
         if (!categoryByCode.ContainsKey(dep.Code))
@@ -113,6 +134,44 @@ public class OreMapSampler
         {
             float radiusAvg = dep.Attributes["radius"]["avg"].AsFloat(0f);
             if (radiusAvg > 0f) veinByCode[dep.Code] = ClassifyVein(radiusAvg);
+        }
+    }
+
+    // Collect "which rocks host this ore" from every deposit variant that actually places blocks
+    // (TriesPerChunk > 0) inside rock. This is what the prospector's primer sells: under Interesting
+    // Ore Gen the scattered ore carries no location signal, but its host-rock preferences - including
+    // which rocks allow the top "bountiful" grade - are real, readable worldgen data.
+    private void RecordScatterLore(DepositVariant dep)
+    {
+        if (dep.Code == null || dep.Attributes == null || dep.TriesPerChunk <= 0f) return;
+
+        var inblock = dep.Attributes["inblock"];
+        if (!(inblock?["code"].AsString("") ?? "").StartsWith("rock")) return;
+
+        var variants = inblock!["allowedVariants"];
+        if (variants == null || !variants.Exists) return;
+
+        if (!hostRocksByCode.TryGetValue(dep.Code, out var rocks))
+            hostRocksByCode[dep.Code] = rocks = new HashSet<string>();
+        foreach (var v in variants.AsArray() ?? Array.Empty<Vintagestory.API.Datastructures.JsonObject>())
+        {
+            string? rock = v.AsString(null!);
+            if (!string.IsNullOrEmpty(rock)) rocks.Add(rock);
+        }
+
+        // Rocks whose allowed grade list includes "bountiful" (keys look like "rock-basalt").
+        var byInBlock = dep.Attributes["placeblock"]?["allowedVariantsByInBlock"];
+        if (byInBlock?.Exists == true && byInBlock.Token is Newtonsoft.Json.Linq.JObject obj)
+        {
+            foreach (var prop in obj.Properties())
+            {
+                if (prop.Value is not Newtonsoft.Json.Linq.JArray grades) continue;
+                if (!grades.Any(g => (string?)g == "bountiful")) continue;
+                string rock = prop.Name.StartsWith("rock-") ? prop.Name.Substring(5) : prop.Name;
+                if (!bountifulRocksByCode.TryGetValue(dep.Code, out var bounty))
+                    bountifulRocksByCode[dep.Code] = bounty = new HashSet<string>();
+                bounty.Add(rock);
+            }
         }
     }
 
@@ -207,7 +266,7 @@ public class OreMapSampler
 
         // Pass 2: among the peak-valued cells, target the one NEAREST the origin. Picking nearest
         // (rather than first-in-iteration-order) both avoids a directional bias over the plateau and
-        // points the player at the closest rich spot — the intuitive thing to travel toward.
+        // points the player at the closest rich spot - the intuitive thing to travel toward.
         int targetCellX = originCellX, targetCellZ = originCellZ;
         double bestDistSq = double.MaxValue;
         for (int cz = 0; cz < size; cz++)

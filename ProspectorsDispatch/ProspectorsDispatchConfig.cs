@@ -10,6 +10,21 @@ public class ProspectorsDispatchConfig
     /// <summary>How far (in blocks) a trader "knows", and the radius a reading is reckoned over.</summary>
     public int SearchRadius = 5000;
 
+    /// <summary>
+    /// Search radius for Interesting Ore Gen hydrothermal districts (only used when IOG is installed).
+    /// Districts are huge but sparse (one 40% roll per ~6-8km tile), so this is deliberately much larger
+    /// than SearchRadius - small values would leave most traders with nothing to sell.
+    /// </summary>
+    public int DistrictSearchRadius = 12000;
+
+    /// <summary>
+    /// Chance (0..1) that a trader has heard of any given district beyond the nearest one (which every
+    /// trader knows). Districts are few and huge, so without this, neighbouring traders would all sell
+    /// identical knowledge; partial knowledge keeps visiting multiple traders worthwhile. Set to 1 so
+    /// every trader knows every district in range. Only used when Interesting Ore Gen is installed.
+    /// </summary>
+    public double DistrictKnowledgeChance = 0.6;
+
     /// <summary>Cap on how many resources a single dispatch lists (the nearest N).</summary>
     public int MaxResourcesPerDispatch = 5;
 
@@ -30,6 +45,8 @@ public class ProspectorsDispatchConfig
         (ResourceCategory.Minerals, DispatchTier.Survey) => Prices.MineralsSurvey,
         (ResourceCategory.Gems, DispatchTier.Rumor) => Prices.GemsRumor,
         (ResourceCategory.Gems, DispatchTier.Survey) => Prices.GemsSurvey,
+        (ResourceCategory.Districts, DispatchTier.Rumor) => Prices.DistrictsRumor,
+        (ResourceCategory.Districts, DispatchTier.Survey) => Prices.DistrictsSurvey,
         _ => 5
     };
 }
@@ -37,7 +54,7 @@ public class ProspectorsDispatchConfig
 /// <summary>Gear prices per category/tier. A value of 0 means that dispatch is free.</summary>
 public class DispatchPriceTable
 {
-    // Rumours are the cheap "triangulation" tier (direction only — cross bearings from several traders).
+    // Rumours are the cheap "triangulation" tier (direction only - cross bearings from several traders).
     // Surveys are the "skip the legwork" premium (direction + distance + the trader's logged coords).
     // Kept low on purpose: covering all the resources you need means buying many dispatches over a wide
     // area, so per-dispatch burden must stay small. All tunable in ModConfig/ProspectorsDispatch.json.
@@ -47,4 +64,13 @@ public class DispatchPriceTable
     public int OresSurvey = 6;
     public int GemsRumor = 2;
     public int GemsSurvey = 10;
+
+    // Interesting Ore Gen hydrothermal districts (only offered when IOG is installed). A district is a
+    // multi-thousand-block motherlode, so the Survey sits at the top of the price ladder.
+    public int DistrictsRumor = 2;
+    public int DistrictsSurvey = 8;
+
+    // The prospector's primer (IOG only): one-time, world-static knowledge of which rocks host which
+    // scattered ores. Deliberately dirt cheap - it's the "learn to read the land" starter purchase.
+    public int Primer = 1;
 }

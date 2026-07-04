@@ -6,12 +6,17 @@ namespace ProspectorsDispatch;
 /// <summary>Which dispatch good covers a resource.</summary>
 public enum ResourceCategory
 {
-    Ores,     // metals + coal — the early-game essentials
+    Ores,     // metals + coal - the early-game essentials
     Gems,
-    Minerals
+    Minerals,
+
+    // Interesting Ore Gen compatibility: when IOG is installed the vanilla ore maps place nothing, so
+    // the three categories above are not offered; instead traders sell directions to IOG's hydrothermal
+    // districts under this pseudo-category. Never returned by CategoryOf/CategoryFromFile.
+    Districts
 }
 
-/// <summary>Static rarity tag (the D3 descriptor) — also the basis for dispatch pricing.</summary>
+/// <summary>Static rarity tag (the D3 descriptor) - also the basis for dispatch pricing.</summary>
 public enum Rarity
 {
     Common,
@@ -38,7 +43,7 @@ public sealed class ResourceEntry
 /// Curated classification of the guidable resources into categories (which dispatch covers them) and
 /// rarity (the static journal tag + the basis for dispatch prices).
 ///
-/// DELIBERATELY hand-authored, NOT derived from worldgen <c>triesPerChunk</c> — that number is a
+/// DELIBERATELY hand-authored, NOT derived from worldgen <c>triesPerChunk</c> - that number is a
 /// misleading abundance proxy (emerald is 64 tries/chunk vs iron's ~0.5, because gems are many tiny
 /// single-block attempts while iron forms a few large masses). These values are gameplay/balance
 /// knobs: tune them freely. They drive both the rarity tag shown in the journal and pricing.
@@ -95,7 +100,7 @@ public static class ResourceCatalog
     /// The dispatch category for a resource. A curated entry wins (so gold/silver stay Ores and
     /// peridot/lapis stay Gems regardless of their worldgen folder); otherwise the category is derived
     /// from the deposit's source folder, which lets ores added by other mods be picked up automatically.
-    /// Null if it can't be classified — the resource is then simply not offered.
+    /// Null if it can't be classified - the resource is then simply not offered.
     /// </summary>
     public static ResourceCategory? CategoryOf(string code, string? fromFile) =>
         ByCode.TryGetValue(code, out var entry) ? entry.Category : CategoryFromFile(fromFile);

@@ -20,25 +20,64 @@ public static class DispatchJournal
     /// their position is not stable); separate sources keep separate entries.
     /// </param>
     public static void File(ICoreServerAPI sapi, IServerPlayer player, OreMapSampler sampler,
-        ResourceCategory category, DispatchTier tier, int originX, int originZ, string sourceKey)
+        ResourceCategory category, DispatchTier tier, int originX, int originZ, string sourceKey,
+        long traderEntityId = 0)
     {
         var journalSys = sapi.ModLoader.GetModSystem<ModJournal>();
         if (journalSys == null) return;
 
-        var config = sapi.ModLoader.GetModSystem<ProspectorsDispatchModSystem>()?.Config
-            ?? new ProspectorsDispatchConfig();
+        var mod = sapi.ModLoader.GetModSystem<ProspectorsDispatchModSystem>();
+        var config = mod?.Config ?? new ProspectorsDispatchConfig();
 
-        (string title, string body) = DispatchReport.Build(
-            sampler, category, tier, originX, originZ, config.SearchRadius, config.MaxResourcesPerDispatch);
+        // The Districts pseudo-category (Interesting Ore Gen compat) reads hydrothermal districts
+        // instead of the ore maps - only the subset THIS trader knows of (see FindDistrictsKnownBy);
+        // everything else about the entry (lore code, title coords) is shared.
+        (string title, string body) = category == ResourceCategory.Districts && mod != null
+            ? DispatchReport.BuildDistricts(
+                mod.DistrictSampler.FindDistrictsKnownBy(traderEntityId, originX, originZ,
+                    config.DistrictSearchRadius, config.DistrictKnowledgeChance),
+                tier, config.MaxResourcesPerDispatch)
+            : DispatchReport.Build(
+                sampler, category, tier, originX, originZ, config.SearchRadius, config.MaxResourcesPerDispatch);
 
-        // Mark where the dispatch was bought — coordinates relative to the world spawn, matching the
+        // Mark where the dispatch was bought - coordinates relative to the world spawn, matching the
         // in-game position readout. This is the reckoning origin, not the resource location.
+        // COORDS-FIRST title: the journal's entry list is narrow and truncates long titles, and the
+        // location is the only thing distinguishing entries - so it must lead, never trail.
         int relX = originX - (int)sapi.World.DefaultSpawnPosition.X;
         int relZ = originZ - (int)sapi.World.DefaultSpawnPosition.Z;
-        title = $"{title}  ({relX}, {relZ})";
+        string catWord = category == ResourceCategory.Districts ? "Mining Grounds" : category.ToString();
+        string tierWord = tier == DispatchTier.Survey ? "Survey" : "Rumor";
+        title = $"({relX}, {relZ}) {catWord} {tierWord}";
         body = $"<i>Bought from a trader near {relX}, {relZ}.</i><br>" + body;
 
         string loreCode = $"prospectorsdispatch-{category}-{sourceKey}";
+        int entryId = ResolveEntryId(journalSys, player.PlayerUID, loreCode);
+
+        var entry = new JournalEntry
+        {
+            Editable = false,
+            Title = title,
+            LoreCode = loreCode,
+            EntryId = entryId
+        };
+        entry.Chapters.Add(new JournalChapter { Text = body, EntryId = entryId, ChapterId = 0 });
+
+        journalSys.AddOrUpdateJournalEntry(player, entry);
+    }
+
+    /// <summary>
+    /// Files the prospector's primer (rock-to-ore knowledge). One global entry per player - the
+    /// knowledge is world-static, so it is not tied to any trader and is only ever bought once.
+    /// </summary>
+    public static void FilePrimer(ICoreServerAPI sapi, IServerPlayer player, OreMapSampler sampler)
+    {
+        var journalSys = sapi.ModLoader.GetModSystem<ModJournal>();
+        if (journalSys == null) return;
+
+        (string title, string body) = DispatchReport.BuildPrimer(sampler);
+
+        const string loreCode = "prospectorsdispatch-primer";
         int entryId = ResolveEntryId(journalSys, player.PlayerUID, loreCode);
 
         var entry = new JournalEntry
@@ -75,7 +114,7 @@ public static class DispatchJournal
         }
         catch
         {
-            // Reflection failed (e.g. field renamed in a future version) — fall back.
+            // Reflection failed (e.g. field renamed in a future version) - fall back.
         }
         return 0;
     }

@@ -1,6 +1,7 @@
 {
-    "trade-filed-paid": "The trader takes {0} gears and marks your journal — open it (J) to read the dispatch.",
-    "trade-filed-free": "The trader marks your journal — open it (J) to read the dispatch.",
-    "trade-nofunds": "The trader shakes their head — you'll need {0} gears for that.",
-    "trade-none": "The trader knows of no {0} worth the walk from here."
+    "trade-filed-paid": "The trader takes {0} gears and marks your journal - open it (J) to read the dispatch.",
+    "trade-filed-free": "The trader marks your journal - open it (J) to read the dispatch.",
+    "trade-nofunds": "The trader shakes their head - you'll need {0} gears for that.",
+    "trade-none": "The trader knows of no {0} worth the walk from here.",
+    "trade-already": "The trader chuckles - you've already had my word on that. Check your journal (J)."
 }
