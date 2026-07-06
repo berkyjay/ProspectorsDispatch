@@ -25,6 +25,9 @@ public struct DistrictReading
     /// <summary>Display names of the ores this district type carries (deduped, prettified).</summary>
     public List<string> OreNames;
 
+    /// <summary>The district's signature host rock, e.g. "basalt" (from its config). Empty if unknown.</summary>
+    public string HostRock;
+
     /// <summary>District centre in world block coordinates (stable identity for knowledge rolls).</summary>
     public int CentreX, CentreZ;
 }
@@ -133,6 +136,7 @@ public class IogDistrictSampler
                     BearingDeg = bearing,
                     DistanceBlocks = Math.Sqrt(distSq),
                     OreNames = OreNamesOf(cfg),
+                    HostRock = HostRockOf(cfg),
                     CentreX = cx,
                     CentreZ = cz
                 });
@@ -193,7 +197,14 @@ public class IogDistrictSampler
         return (cx, cz, chosen);
     }
 
-    /// <summary>"hydrothermal-cold" → "cold hydrothermal"; "magmatic-felsic-shallow" → "shallow felsic magmatic".</summary>
+    /// <summary>The district's host rock name from its config code, e.g. "rock-basalt" -> "basalt".</summary>
+    private static string HostRockOf(DistrictConfigLite cfg)
+    {
+        string code = cfg.HostMaterialCode ?? "";
+        return code.StartsWith("rock-") ? code.Substring(5) : code.Split('-').LastOrDefault() ?? "";
+    }
+
+    /// <summary>"hydrothermal-cold" -> "cold hydrothermal"; "magmatic-felsic-shallow" -> "shallow felsic magmatic".</summary>
     private static string Humanize(string code)
     {
         if (string.IsNullOrEmpty(code)) return "mineral-rich";

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.1
+
+- Interesting Ore Gen: Survey dispatches for mining grounds now list every ore the
+  grounds carries, so rarer ores (like chromite) are no longer hidden behind "and more."
+  Rumours keep the shorter list.
+- Each mining-grounds dispatch now names the district's host rock, e.g. "(basalt
+  country)", so you know what stone to look for when you arrive - handy for ores that
+  only occur inside districts.
+- Added a note to mining-grounds dispatches that other traders may have heard of nearer
+  grounds, since each trader only knows some of them.
+- Cleaner ore names in district listings (e.g. "Native platinum", "Corundum sapphire",
+  "Ruby" instead of the run-together code names), and consistent capitalisation
+  regardless of which mod an ore comes from.
+
 ## 1.2.0
 
 - Interesting Ore Gen compatibility: with IOG installed, traders now sell directions to

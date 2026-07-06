@@ -147,6 +147,9 @@ public static class DispatchReport
         // Districts are 1000-3000 blocks in radius (their faults reach even wider), so the player hits
         // the outskirts well before the quoted centre distance - say so, or the walk feels overstated.
         sb.AppendLine("<i>Each heading marks the heart of the grounds - they sprawl far wider, so you'll strike their edges sooner.</i>");
+        // Knowledge is split across traders (see FindDistrictsKnownBy), so a lead that feels far may be
+        // nearer from someone else. Kept in the header so it is seen without paging to the end.
+        sb.AppendLine("<i>And mind - no one trader hears of every grounds. Another may know of nearer ones.</i>");
         sb.AppendLine();
 
         if (hits.Count == 0)
@@ -155,25 +158,32 @@ public static class DispatchReport
             return (title, sb.ToString().TrimEnd());
         }
 
+        // A Survey names every ore a grounds carries (the paid, complete reading); a Rumour keeps the
+        // short "and more" list. Full lists are much taller, so Surveys page one district at a time.
+        bool fullOres = tier == DispatchTier.Survey;
+        int perPage = fullOres ? 1 : 2;
+
         int shown = 0;
         foreach (var d in hits)
         {
-            if (shown > 0 && shown % 2 == 0) sb.AppendLine(PageBreak);
+            if (shown > 0 && shown % perPage == 0) sb.AppendLine(PageBreak);
             shown++;
 
             string name = Capitalize(d.Kind) + " grounds";
-            string ores = OresPhrase(d.OreNames);
+            string country = string.IsNullOrEmpty(d.HostRock)
+                ? "" : $" <i>({RockDisplayName(d.HostRock)} country)</i>";
+            string ores = OresPhrase(d.OreNames, fullOres);
 
             if (tier == DispatchTier.Survey)
             {
                 string dir = Dir8[d.OctantIndex];
                 int paces = RoundPaces(d.DistanceBlocks);
-                sb.AppendLine($"<strong>{name}</strong>: roughly <strong>{paces:N0} paces</strong> to the <strong>{dir}</strong>.<br><i>Bearing {ores}.</i>");
+                sb.AppendLine($"<strong>{name}</strong>{country}: roughly <strong>{paces:N0} paces</strong> to the <strong>{dir}</strong>.<br><i>Bearing {ores}.</i>");
             }
             else
             {
                 string dir = Dir4[Cardinal4(d.BearingDeg)];
-                sb.AppendLine($"<strong>{name}</strong>: somewhere to the <strong>{dir}</strong>.<br><i>Bearing {ores}.</i>");
+                sb.AppendLine($"<strong>{name}</strong>{country}: somewhere to the <strong>{dir}</strong>.<br><i>Bearing {ores}.</i>");
             }
 
             sb.AppendLine();
@@ -236,34 +246,56 @@ public static class DispatchReport
         return rock;
     }
 
-    // "sulfur, cinnabar, malachite and more" - capped so one district can't flood the page, and
-    // deduped by DISPLAY name (two codes may localize to the same label).
-    private static string OresPhrase(List<string> names)
+    // "sulfur, cinnabar, malachite and more" - deduped by DISPLAY name (two codes may localize to the
+    // same label). Rumour caps the list so the page stays short; a Survey (full=true) names them all,
+    // so a rarer ore like chromite is never hidden behind "and more".
+    private static string OresPhrase(List<string> names, bool full = false)
     {
         const int MaxNames = 6;
         if (names == null || names.Count == 0) return "ore of kinds unknown";
         var shown = names.Select(OreDisplayName).Distinct().ToList();
+        if (full) return string.Join(", ", shown);
         string phrase = string.Join(", ", shown.Take(MaxNames));
         return shown.Count > MaxNames ? phrase + " and more" : phrase;
     }
 
+    // Mineral-group prefixes IOG glues onto a variety inside one token ("corundumsapphire",
+    // "nativeplatinum", "tourmalinerubellite"). Most of these gem varieties have no lang entry anywhere,
+    // so splitting on the group yields a readable, mineralogically-sensible two-word name.
+    private static readonly string[] MineralGroupPrefixes =
+        { "native", "corundum", "tourmaline", "garnet", "beryl", "topaz", "quartz" };
+
     // District ore names arrive as code tokens, possibly compound ("quartz_nativegold" = gold in a
     // quartz tracer). Resolve the localized name by trying the FULL code first (vanilla has entries
-    // like ore-quartz_nativegold), then the '_' subtokens most-specific-last ("nativegold" before
-    // "quartz"), then fall back to the raw token prettified.
+    // like ore-quartz_nativegold), then the '_' subtokens most-specific-last, then split a known
+    // mineral group prefix, and only then fall back to the raw token prettified.
     private static string OreDisplayName(string name)
     {
+        // Every return path is funnelled through Capitalize: lang entries vary in case across mods
+        // (some ores come back lowercase), so we force a consistent leading capital for a tidy list.
         string full = "ore-" + name;
         string localized = Lang.Get(full);
-        if (localized != full) return localized;
+        if (localized != full) return Capitalize(localized);
 
         var subs = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
         for (int i = subs.Length - 1; i >= 1; i--)
         {
             string key = "ore-" + subs[i];
             localized = Lang.Get(key);
-            if (localized != key) return localized;
+            if (localized != key) return Capitalize(localized);
         }
+
+        // IOG glues a mineral group onto a variety with no lang entry. "gemruby" -> the "gem" prefix is
+        // redundant (drop it -> "Ruby"); "corundumsapphire" -> "Corundum sapphire".
+        string token = subs[subs.Length - 1];
+        if (token.StartsWith("gem") && token.Length > 3)
+            return Capitalize(token.Substring(3));
+        foreach (string p in MineralGroupPrefixes)
+        {
+            if (token.StartsWith(p) && token.Length > p.Length)
+                return Capitalize(p) + " " + token.Substring(p.Length);
+        }
+
         return Capitalize(name.Replace('_', ' '));
     }
 
@@ -299,8 +331,9 @@ public static class DispatchReport
     {
         string key = "ore-" + code;
         string name = Lang.Get(key);
-        // Lang.Get returns the key unchanged when there's no translation.
-        return name == key ? Capitalize(code) : name;
+        // Lang.Get returns the key unchanged when there's no translation. Capitalize either way, so
+        // ore names read consistently even when a mod's lang entry is lowercase.
+        return Capitalize(name == key ? code : name);
     }
 
     private static string Capitalize(string s) =>
