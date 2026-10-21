@@ -6,88 +6,75 @@ using Vintagestory.API.Config;
 
 namespace ProspectorsDispatch;
 
-/// <summary>The detail/price tier of a dispatch.</summary>
-public enum DispatchTier
-{
-    Rumor,  // cheap: a vague 4-point heading + rarity + vein size, no distance. Every trader sells these.
-    Survey  // pricey: precise 8-point heading + an approximate (rounded) distance. Only well-informed traders sell these.
-}
-
 /// <summary>
-/// Renders a purchased dispatch (a category + tier, reckoned from a trader's position) into the
-/// title and body of a journal entry. The hedged, hearsay flavor lives in the header; each resource
-/// line is kept short and scannable (bold name + heading, italic rarity/vein aside).
-///
-/// The tiers differ on two axes: a Rumor gives only a coarse 4-point heading and no distance; a
-/// Survey gives a precise 8-point heading plus a (deliberately banded) distance. No exact coordinates
-/// are ever given - traders deal in hearsay and landmarks, not a grid.
+/// Renders dispatches into journal text: a short hearsay header, then one short line per resource
+/// (bold name and heading, with rarity and vein size in italics).
 /// </summary>
+/// <remarks>
+/// A Rumor gives a 4-point heading and no distance. A Survey gives an 8-point heading and a rounded
+/// distance. Neither gives coordinates: traders deal in hearsay, not a grid.
+/// </remarks>
 public static class DispatchReport
 {
-    public const int DefaultRadius = 5000;
-
-    // Cap on entries per dispatch - keeps the page readable and, by naming only the nearest few,
-    // pushes players to seek out other traders for leads on everything else.
+    /// <summary>
+    /// Default cap on entries per dispatch. Listing only the nearest few keeps the page readable and
+    /// gives players a reason to visit other traders.
+    /// </summary>
     public const int MaxEntries = 5;
 
-    // Force a journal page break after this many entries. The native journal (GuiDialogJournal.Paginate)
-    // estimates page height by measuring the raw VTML-tagged text with a plain font, which does not match
-    // the formatted, wrapped render - so a full page overshoots the text area and the last lines end up
-    // hidden behind the page buttons. Emitting the journal's own ___NEWPAGE___ token caps each page well
-    // short of that, sidestepping the miscalculation.
+    // The journal (GuiDialogJournal.Paginate) estimates page height by measuring the raw VTML text in
+    // a plain font, which underestimates the formatted, wrapped text. A full page then runs under the
+    // page buttons, so the reports insert the journal's own page-break token well before that point.
     private const int EntriesPerPage = 3;
+    private const int PrimerEntriesPerPage = 4;
     private const string PageBreak = "___NEWPAGE___";
 
-    private static readonly string[] Dir8 =
+    private static readonly string[] s_directions8 =
         { "north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west" };
-    private static readonly string[] Dir4 = { "north", "east", "south", "west" };
 
-    // Indexed by VeinSize: Scattered, Small, Sizable, Large.
-    private static readonly string[] VeinWords =
+    private static readonly string[] s_directions4 = { "north", "east", "south", "west" };
+
+    // Indexed by VeinSize.
+    private static readonly string[] s_veinWords =
         { "scattered specks", "small veins", "sizable veins", "large masses" };
 
-    // The Survey distance: an approximate, rounded pace count. Explicit enough to plan a journey, but
-    // coarse - and combined with only a 45-degree heading and no logged origin, it never pins a spot.
-    private static int RoundPaces(double blocks)
-    {
-        int n = (int)Math.Round(blocks / 100.0) * 100;
-        return Math.Max(100, n);
-    }
+    // Mineral-group prefixes that IOG joins to a variety in one token ("corundumsapphire",
+    // "nativeplatinum"). Most of these varieties have no lang entry, so splitting off the group gives
+    // a readable two-word name.
+    private static readonly string[] s_mineralGroupPrefixes =
+        { "native", "corundum", "tourmaline", "garnet", "beryl", "topaz", "quartz" };
 
+    /// <summary>Renders a vanilla ore-map dispatch for one category, reckoned from the origin.</summary>
     public static (string Title, string Body) Build(
         OreMapSampler sampler, ResourceCategory category, DispatchTier tier, int originX, int originZ,
         int radius, int maxEntries = MaxEntries)
     {
-        string cat = category.ToString().ToLowerInvariant();
-        string title = $"Prospecting {(tier == DispatchTier.Survey ? "Survey" : "Rumor")}: {category}";
+        string categoryWord = category.ToString().ToLowerInvariant();
+        string title = $"Prospecting {TierTitle(tier)}: {category}";
 
-        // Gather what's findable, then keep only the nearest few.
-        var hits = new List<(string code, OreReading r)>();
-        foreach (var code in sampler.CodesInCategory(category))
-        {
-            OreReading r = sampler.Sample(code, originX, originZ, radius);
-            if (r.Found) hits.Add((code, r));
-        }
-        hits = hits.OrderBy(h => h.r.DistanceBlocks).Take(maxEntries).ToList();
+        var hits = sampler.CodesInCategory(category)
+            .Select(code => (Code: code, Reading: sampler.Sample(code, originX, originZ, radius)))
+            .Where(hit => hit.Reading.Found)
+            .OrderBy(hit => hit.Reading.DistanceBlocks)
+            .Take(maxEntries)
+            .ToList();
 
-        var sb = new StringBuilder();
-
-        // The hearsay framing lives here, once, so the lines below can stay terse and scannable.
-        sb.AppendLine(tier == DispatchTier.Survey
-            ? $"<i>A surveyor's reckoning of the {cat} in these parts - truer than tavern talk, but no promises.</i>"
-            : $"<i>Tavern talk of {cat} hereabouts - a rough heading at best, so take it with a pinch of salt.</i>");
-        sb.AppendLine();
+        var body = new StringBuilder();
+        body.AppendLine(tier == DispatchTier.Survey
+            ? $"<i>A surveyor's reckoning of the {categoryWord} in these parts, truer than tavern talk but no promises.</i>"
+            : $"<i>Tavern talk of {categoryWord} hereabouts. A rough heading at best, so take it with a pinch of salt.</i>");
+        body.AppendLine();
 
         if (hits.Count == 0)
         {
-            sb.AppendLine($"Nobody could name any {cat} worth the walk from here.");
-            return (title, sb.ToString().TrimEnd());
+            body.AppendLine($"Nobody could name any {categoryWord} worth the walk from here.");
+            return (title, body.ToString().TrimEnd());
         }
 
         int shown = 0;
-        foreach (var (code, r) in hits)
+        foreach (var (code, reading) in hits)
         {
-            if (shown > 0 && shown % EntriesPerPage == 0) sb.AppendLine(PageBreak);
+            if (shown > 0 && shown % EntriesPerPage == 0) body.AppendLine(PageBreak);
             shown++;
 
             string name = LocalizedName(code);
@@ -95,145 +82,156 @@ public static class DispatchReport
 
             if (tier == DispatchTier.Survey)
             {
-                string dir = Dir8[r.OctantIndex];
-                int paces = RoundPaces(r.DistanceBlocks);
-                sb.AppendLine($"<strong>{name}</strong>: roughly <strong>{paces:N0} paces</strong> to the <strong>{dir}</strong>. <i>{aside}</i>");
+                string direction = s_directions8[reading.OctantIndex];
+                int paces = RoundPaces(reading.DistanceBlocks);
+                body.AppendLine($"<strong>{name}</strong>: roughly <strong>{paces:N0} paces</strong> to the <strong>{direction}</strong>. <i>{aside}</i>");
             }
             else
             {
-                string dir = Dir4[Cardinal4(r.BearingDeg)];
-                sb.AppendLine($"<strong>{name}</strong>: somewhere to the <strong>{dir}</strong>. <i>{aside}</i>");
+                string direction = s_directions4[CompassMath.Cardinal(reading.BearingDeg)];
+                body.AppendLine($"<strong>{name}</strong>: somewhere to the <strong>{direction}</strong>. <i>{aside}</i>");
             }
 
-            sb.AppendLine(); // blank line between entries for readability
+            body.AppendLine();
         }
 
-        return (title, sb.ToString().TrimEnd());
+        return (title, body.ToString().TrimEnd());
     }
 
     /// <summary>
-    /// Renders a mining-grounds dispatch (Interesting Ore Gen compat): each entry is a hydrothermal
-    /// district - its kind, heading (and distance, on a Survey) and the ores its type carries. District
-    /// entries run two lines each, so they page at two per journal page.
+    /// Renders an Interesting Ore Gen mining-grounds dispatch. Each entry is a hydrothermal district:
+    /// its kind, heading (and distance, for a Survey) and the ores its type carries.
     /// </summary>
+    /// <param name="known">The districts this trader knows of, nearest first.</param>
     public static (string Title, string Body) BuildDistricts(
-        List<DistrictReading> known, DispatchTier tier, int maxEntries = MaxEntries)
+        IReadOnlyList<DistrictReading> known, DispatchTier tier, int maxEntries = MaxEntries)
     {
-        string title = $"Prospecting {(tier == DispatchTier.Survey ? "Survey" : "Rumor")}: Mining Grounds";
+        string title = $"Prospecting {TierTitle(tier)}: Mining Grounds";
 
-        // Prefer TYPE DIVERSITY over raw distance: district kinds carry different ore portfolios (a
-        // mafic district has no tin; a cold hydrothermal no gold), so "the nearest grounds of each
-        // kind" is far more useful than "the N nearest" - which could be N copies of the same kind,
-        // burying the one far-but-unique district the player actually needs. Remaining slots then
-        // fill with the next-nearest of any kind; final list reads nearest-first.
+        // District kinds carry different ores (a mafic district has no tin, a cold hydrothermal one no
+        // gold), so the nearest district of each kind is listed first. That keeps a distant but unique
+        // kind from being crowded out by several close districts of the same kind. Remaining slots go
+        // to the next nearest of any kind, and the final list is sorted by distance.
         var hits = new List<DistrictReading>();
         var seenKinds = new HashSet<string>();
-        foreach (var d in known) // known is nearest-first
+        foreach (var district in known)
         {
             if (hits.Count >= maxEntries) break;
-            if (seenKinds.Add(d.Kind)) hits.Add(d);
+            if (seenKinds.Add(district.Kind)) hits.Add(district);
         }
-        foreach (var d in known)
+        foreach (var district in known)
         {
             if (hits.Count >= maxEntries) break;
-            if (!hits.Contains(d)) hits.Add(d);
+            if (!hits.Contains(district)) hits.Add(district);
         }
         hits = hits.OrderBy(d => d.DistanceBlocks).ToList();
 
-        var sb = new StringBuilder();
-        sb.AppendLine(tier == DispatchTier.Survey
-            ? "<i>A surveyor's reckoning of the great mining grounds in this land - truer than tavern talk, but no promises.</i>"
-            : "<i>Tavern talk of rich mining grounds - a rough heading at best, so take it with a pinch of salt.</i>");
-        // Districts are 1000-3000 blocks in radius (their faults reach even wider), so the player hits
-        // the outskirts well before the quoted centre distance - say so, or the walk feels overstated.
-        sb.AppendLine("<i>Each heading marks the heart of the grounds - they sprawl far wider, so you'll strike their edges sooner.</i>");
-        // Knowledge is split across traders (see FindDistrictsKnownBy), so a lead that feels far may be
-        // nearer from someone else. Kept in the header so it is seen without paging to the end.
-        sb.AppendLine("<i>And mind - no one trader hears of every grounds. Another may know of nearer ones.</i>");
-        sb.AppendLine();
+        var body = new StringBuilder();
+        body.AppendLine(tier == DispatchTier.Survey
+            ? "<i>A surveyor's reckoning of the great mining grounds in this land, truer than tavern talk but no promises.</i>"
+            : "<i>Tavern talk of rich mining grounds. A rough heading at best, so take it with a pinch of salt.</i>");
+
+        // Districts span 1000 to 3000 blocks, so players reach the edge well before the quoted distance.
+        body.AppendLine("<i>Each heading marks the heart of the grounds. They sprawl far wider, so you'll strike their edges sooner.</i>");
+
+        // Each trader knows only some districts (see IogDistrictSampler.FindDistrictsKnownBy).
+        body.AppendLine("<i>And mind, no one trader hears of every grounds. Another may know of nearer ones.</i>");
+        body.AppendLine();
 
         if (hits.Count == 0)
         {
-            sb.AppendLine("Nobody could name mining grounds worth the walk from here.");
-            return (title, sb.ToString().TrimEnd());
+            body.AppendLine("Nobody could name mining grounds worth the walk from here.");
+            return (title, body.ToString().TrimEnd());
         }
 
-        // A Survey names every ore a grounds carries (the paid, complete reading); a Rumour keeps the
-        // short "and more" list. Full lists are much taller, so Surveys page one district at a time.
-        bool fullOres = tier == DispatchTier.Survey;
-        int perPage = fullOres ? 1 : 2;
+        // A Survey names every ore a district carries; a Rumor shortens the list. Full lists are much
+        // longer, so Surveys show one district per page.
+        bool fullOreList = tier == DispatchTier.Survey;
+        int perPage = fullOreList ? 1 : 2;
 
         int shown = 0;
-        foreach (var d in hits)
+        foreach (var district in hits)
         {
-            if (shown > 0 && shown % perPage == 0) sb.AppendLine(PageBreak);
+            if (shown > 0 && shown % perPage == 0) body.AppendLine(PageBreak);
             shown++;
 
-            string name = Capitalize(d.Kind) + " grounds";
-            string country = string.IsNullOrEmpty(d.HostRock)
-                ? "" : $" <i>({RockDisplayName(d.HostRock)} country)</i>";
-            string ores = OresPhrase(d.OreNames, fullOres);
+            string name = Capitalize(district.Kind) + " grounds";
+            string country = string.IsNullOrEmpty(district.HostRock)
+                ? ""
+                : $" <i>({RockDisplayName(district.HostRock)} country)</i>";
+            string ores = OresPhrase(district.OreNames, fullOreList);
 
             if (tier == DispatchTier.Survey)
             {
-                string dir = Dir8[d.OctantIndex];
-                int paces = RoundPaces(d.DistanceBlocks);
-                sb.AppendLine($"<strong>{name}</strong>{country}: roughly <strong>{paces:N0} paces</strong> to the <strong>{dir}</strong>.<br><i>Bearing {ores}.</i>");
+                string direction = s_directions8[district.OctantIndex];
+                int paces = RoundPaces(district.DistanceBlocks);
+                body.AppendLine($"<strong>{name}</strong>{country}: roughly <strong>{paces:N0} paces</strong> to the <strong>{direction}</strong>.<br><i>Bearing {ores}.</i>");
             }
             else
             {
-                string dir = Dir4[Cardinal4(d.BearingDeg)];
-                sb.AppendLine($"<strong>{name}</strong>{country}: somewhere to the <strong>{dir}</strong>.<br><i>Bearing {ores}.</i>");
+                string direction = s_directions4[CompassMath.Cardinal(district.BearingDeg)];
+                body.AppendLine($"<strong>{name}</strong>{country}: somewhere to the <strong>{direction}</strong>.<br><i>Bearing {ores}.</i>");
             }
 
-            sb.AppendLine();
+            body.AppendLine();
         }
 
-        return (title, sb.ToString().TrimEnd());
+        return (title, body.ToString().TrimEnd());
     }
 
     /// <summary>
-    /// Renders the prospector's primer: which rock types host which scattered ores (and where the top
-    /// "bountiful" grade forms). World-static knowledge read from the active worldgen deposits - the
-    /// player learns to read the land instead of being handed coordinates. One journal entry, bought once.
+    /// Renders the prospector's primer: which rocks host which scattered ores, and where the bountiful
+    /// grade forms. The content is the same everywhere in a world, so it is bought once.
     /// </summary>
     public static (string Title, string Body) BuildPrimer(OreMapSampler sampler)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("<i>A weathered primer on reading the rocks - which stone carries which ore. The land tells you where to dig, if you know its tongue.</i>");
-        sb.AppendLine();
+        const string title = "Prospector's Primer";
+
+        var body = new StringBuilder();
+        body.AppendLine("<i>A weathered primer on reading the rocks: which stone carries which ore. The land tells you where to dig, if you know its tongue.</i>");
+        body.AppendLine();
 
         var entries = sampler.ScatterLoreCodes()
             .Select(code =>
             {
-                (List<string> rocks, HashSet<string> bounty) = sampler.HostRocksOf(code);
-                return (name: LocalizedName(code), rocks, bounty);
+                var (rocks, bountiful) = sampler.HostRocksOf(code);
+                return (Name: LocalizedName(code), Rocks: rocks, Bountiful: bountiful);
             })
-            .Where(e => e.rocks.Count > 0)
-            .OrderBy(e => e.name)
+            .Where(entry => entry.Rocks.Count > 0)
+            .OrderBy(entry => entry.Name)
             .ToList();
 
         if (entries.Count == 0)
         {
-            sb.AppendLine("Its pages are water-stained beyond reading.");
-            return ("Prospector's Primer", sb.ToString().TrimEnd());
+            body.AppendLine("Its pages are water-stained beyond reading.");
+            return (title, body.ToString().TrimEnd());
         }
 
         int shown = 0;
-        foreach (var (name, rocks, bounty) in entries)
+        foreach (var (name, rocks, bountiful) in entries)
         {
-            if (shown > 0 && shown % 4 == 0) sb.AppendLine(PageBreak);
+            if (shown > 0 && shown % PrimerEntriesPerPage == 0) body.AppendLine(PageBreak);
             shown++;
 
             string rockList = string.Join(", ", rocks.Select(RockDisplayName));
-            string bountyNote = bounty.Count > 0
-                ? $" <i>(bountiful in {string.Join(", ", bounty.OrderBy(x => x).Select(RockDisplayName))})</i>"
+            string bountifulNote = bountiful.Count > 0
+                ? $" <i>(bountiful in {string.Join(", ", bountiful.OrderBy(x => x).Select(RockDisplayName))})</i>"
                 : "";
-            sb.AppendLine($"<strong>{name}</strong>: {rockList}.{bountyNote}");
-            sb.AppendLine();
+            body.AppendLine($"<strong>{name}</strong>: {rockList}.{bountifulNote}");
+            body.AppendLine();
         }
 
-        return ("Prospector's Primer", sb.ToString().TrimEnd());
+        return (title, body.ToString().TrimEnd());
+    }
+
+    private static string TierTitle(DispatchTier tier) => tier == DispatchTier.Survey ? "Survey" : "Rumor";
+
+    // A Survey distance rounded to the nearest 100 paces. Enough to plan a trip, but combined with a
+    // 45-degree heading it never pins down a spot.
+    private static int RoundPaces(double blocks)
+    {
+        int paces = (int)Math.Round(blocks / 100.0) * 100;
+        return Math.Max(100, paces);
     }
 
     private static string RockDisplayName(string rock)
@@ -246,74 +244,62 @@ public static class DispatchReport
         return rock;
     }
 
-    // "sulfur, cinnabar, malachite and more" - deduped by DISPLAY name (two codes may localize to the
-    // same label). Rumour caps the list so the page stays short; a Survey (full=true) names them all,
-    // so a rarer ore like chromite is never hidden behind "and more".
-    private static string OresPhrase(List<string> names, bool full = false)
+    // "Sulfur, Cinnabar, Malachite and more". Duplicates are removed by display name, since two codes
+    // can share a label. The short form caps the list; the full form names every ore, so a rarer ore
+    // such as chromite is never hidden behind "and more".
+    private static string OresPhrase(IReadOnlyList<string>? names, bool full)
     {
         const int MaxNames = 6;
         if (names == null || names.Count == 0) return "ore of kinds unknown";
+
         var shown = names.Select(OreDisplayName).Distinct().ToList();
         if (full) return string.Join(", ", shown);
+
         string phrase = string.Join(", ", shown.Take(MaxNames));
         return shown.Count > MaxNames ? phrase + " and more" : phrase;
     }
 
-    // Mineral-group prefixes IOG glues onto a variety inside one token ("corundumsapphire",
-    // "nativeplatinum", "tourmalinerubellite"). Most of these gem varieties have no lang entry anywhere,
-    // so splitting on the group yields a readable, mineralogically-sensible two-word name.
-    private static readonly string[] MineralGroupPrefixes =
-        { "native", "corundum", "tourmaline", "garnet", "beryl", "topaz", "quartz" };
-
-    // District ore names arrive as code tokens, possibly compound ("quartz_nativegold" = gold in a
-    // quartz tracer). Resolve the localized name by trying the FULL code first (vanilla has entries
-    // like ore-quartz_nativegold), then the '_' subtokens most-specific-last, then split a known
-    // mineral group prefix, and only then fall back to the raw token prettified.
+    // District ore names arrive as code tokens, sometimes compound ("quartz_nativegold" is gold in a
+    // quartz tracer). Tries the full code first (vanilla has entries such as ore-quartz_nativegold),
+    // then each '_' part from the most specific, then splits off a known mineral group, and finally
+    // falls back to the raw token. Lang entries differ in case between mods, so every result is
+    // capitalized.
     private static string OreDisplayName(string name)
     {
-        // Every return path is funnelled through Capitalize: lang entries vary in case across mods
-        // (some ores come back lowercase), so we force a consistent leading capital for a tidy list.
-        string full = "ore-" + name;
-        string localized = Lang.Get(full);
-        if (localized != full) return Capitalize(localized);
+        string fullKey = "ore-" + name;
+        string localized = Lang.Get(fullKey);
+        if (localized != fullKey) return Capitalize(localized);
 
-        var subs = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = subs.Length - 1; i >= 1; i--)
+        var parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = parts.Length - 1; i >= 1; i--)
         {
-            string key = "ore-" + subs[i];
+            string key = "ore-" + parts[i];
             localized = Lang.Get(key);
             if (localized != key) return Capitalize(localized);
         }
 
-        // IOG glues a mineral group onto a variety with no lang entry. "gemruby" -> the "gem" prefix is
-        // redundant (drop it -> "Ruby"); "corundumsapphire" -> "Corundum sapphire".
-        string token = subs[subs.Length - 1];
-        if (token.StartsWith("gem") && token.Length > 3)
-            return Capitalize(token.Substring(3));
-        foreach (string p in MineralGroupPrefixes)
+        // "gemruby" -> "Ruby"; "corundumsapphire" -> "Corundum sapphire".
+        string token = parts[parts.Length - 1];
+        if (token.StartsWith("gem") && token.Length > 3) return Capitalize(token.Substring(3));
+
+        foreach (string prefix in s_mineralGroupPrefixes)
         {
-            if (token.StartsWith(p) && token.Length > p.Length)
-                return Capitalize(p) + " " + token.Substring(p.Length);
+            if (token.StartsWith(prefix) && token.Length > prefix.Length)
+            {
+                return Capitalize(prefix) + " " + token.Substring(prefix.Length);
+            }
         }
 
         return Capitalize(name.Replace('_', ' '));
     }
 
-    /// <summary>Round a bearing to one of 4 cardinal directions (the coarse Rumor heading).</summary>
-    private static int Cardinal4(double bearingDeg)
-    {
-        int c = (int)Math.Round(bearingDeg / 90.0) % 4;
-        return c < 0 ? c + 4 : c;
-    }
-
-    // The italic aside: "(rarity, in vein)" when both are known. Rarity is curated and has no honest
-    // automatic source (see ResourceCatalog), so a resource with no curated entry - e.g. one added by
-    // another mod - gets an honest hearsay fallback rather than a fabricated rarity, keeping its real
-    // vein descriptor when we have it.
+    // The italic note after each entry, such as "(rare, in small veins)". Rarity is curated (see
+    // ResourceCatalog), so a resource without a catalog entry, such as one added by another mod, gets
+    // a "traces detected" note instead of an invented rarity.
     private static string Aside(OreMapSampler sampler, string code)
     {
         VeinSize? vein = sampler.VeinSizeOf(code);
-        string? veinWords = vein.HasValue ? VeinWords[(int)vein.Value] : null;
+        string? veinWords = vein.HasValue ? s_veinWords[(int)vein.Value] : null;
 
         ResourceEntry? entry = ResourceCatalog.Get(code);
         if (entry != null)
@@ -323,19 +309,19 @@ public static class DispatchReport
         }
 
         return veinWords != null
-            ? $"(traces detected - worth uncertain, in {veinWords})"
+            ? $"(traces detected, worth uncertain, in {veinWords})"
             : "(traces detected, extent uncertain)";
     }
 
+    // Lang.Get returns the key itself when there is no translation. The result is capitalized either
+    // way, because some mods' lang entries are lowercase.
     private static string LocalizedName(string code)
     {
         string key = "ore-" + code;
         string name = Lang.Get(key);
-        // Lang.Get returns the key unchanged when there's no translation. Capitalize either way, so
-        // ore names read consistently even when a mod's lang entry is lowercase.
         return Capitalize(name == key ? code : name);
     }
 
-    private static string Capitalize(string s) =>
-        string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
+    private static string Capitalize(string text) =>
+        string.IsNullOrEmpty(text) ? text : char.ToUpperInvariant(text[0]) + text.Substring(1);
 }

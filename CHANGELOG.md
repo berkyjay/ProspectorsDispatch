@@ -1,17 +1,29 @@
 # Changelog
 
+## 1.2.2
+
+- Interesting Ore Gen 3.0 and later: IOG 3 removed the hydrothermal districts that mining-grounds
+  dispatches point at, and it still turns off vanilla ore generation. With IOG 3 installed, traders
+  now offer no dispatches instead of a menu that could never find anything, and the server log says
+  why. IOG 2.x and worlds without IOG are unchanged.
+- Checked against Vintage Story 1.22.7.
+- Text tidy-up: "Rumour" is now "Rumor" everywhere, tier prices read "Rumor (1 gear)", and some
+  dialogue and journal punctuation is cleaner.
+- Code cleanup with no change in behavior: one type per file, standard C# naming, shared compass
+  helpers, unused code removed, and comments brought up to date.
+
 ## 1.2.1
 
 - Interesting Ore Gen: Survey dispatches for mining grounds now list every ore the
   grounds carries, so rarer ores (like chromite) are no longer hidden behind "and more."
-  Rumours keep the shorter list.
+  Rumors keep the shorter list.
 - Each mining-grounds dispatch now names the district's host rock, e.g. "(basalt
-  country)", so you know what stone to look for when you arrive - handy for ores that
+  country)", so you know what stone to look for when you arrive, handy for ores that
   only occur inside districts.
 - Added a note to mining-grounds dispatches that other traders may have heard of nearer
   grounds, since each trader only knows some of them.
 - Cleaner ore names in district listings (e.g. "Native platinum", "Corundum sapphire",
-  "Ruby" instead of the run-together code names), and consistent capitalisation
+  "Ruby" instead of the run-together code names), and consistent capitalization
   regardless of which mod an ore comes from.
 
 ## 1.2.0
@@ -20,11 +32,11 @@
   IOG's hydrothermal mining districts ("Rich mining grounds") instead of the vanilla
   ore-map dispatches, which IOG's worldgen makes meaningless. District dispatches name
   the grounds' kind, heading, distance (Survey tier) and the ores they carry.
-- New: the Prospector's Primer (IOG worlds) - a cheap one-time purchase recording which
+- New: the Prospector's Primer (IOG worlds): a cheap one-time purchase recording which
   rock types host which scattered ores, including where the top "bountiful" grade forms.
 - Traders now keep books: a dispatch you've already bought disappears from that trader's
-  menu (buying a Survey also retires the lesser Rumour), and a stale purchase attempt is
-  politely refused instead of charged. A Rumour can no longer overwrite a better Survey
+  menu (buying a Survey also retires the lesser Rumor), and a stale purchase attempt is
+  politely refused instead of charged. A Rumor can no longer overwrite a better Survey
   in your journal.
 - Each trader has heard of their own subset of the mining districts in range (nearest
   always known), so visiting multiple traders is worth it. Configurable via
@@ -39,14 +51,14 @@
 ## 1.1.0
 
 - Dispatches now cover any ore that uses the game's ore-distribution maps, including
-  ores added by other worldgen mods (e.g. Geology Additions) — no longer limited to a
+  ores added by other worldgen mods (e.g. Geology Additions), no longer limited to a
   fixed list. Categories (Ores/Gems/Minerals) are worked out from each ore's worldgen
   data automatically.
 - Ores that PD doesn't have a curated rarity for now show an honest "traces detected"
   note instead of a placeholder, while still giving the direction, distance, and vein size.
 - Fixed: in single-player, buying a dispatch charged the player twice. (Introduced in
   1.0.1, which applied its trader fix once per side in the shared single-player process.)
-- Fixed: long dispatch entries no longer run underneath the journal's page buttons — the
+- Fixed: long dispatch entries no longer run underneath the journal's page buttons; the
   text now pages cleanly.
 
 ## 1.0.1

@@ -11,8 +11,8 @@
     - Close the game before re-running: it locks the mod DLL while running, so a rebuild will fail.
     - Assets (itemtypes/lang/textures) are bundled into the build output, so only --addModPath is needed.
     - -World requires a valid -PlayStyle langcode (the game's arg parser needs one even to reopen a world).
-      Default preset-surviveandbuild generates NORMAL terrain (has ore maps). Avoid preset-creativebuilding
-      for testing this mod: it's a SUPERFLAT world with no ore generation, so no dispatches will appear.
+      Default preset-surviveandbuild generates normal terrain (has ore maps). Avoid preset-creativebuilding
+      for testing this mod: it's a superflat world with no ore generation, so no dispatches will appear.
       Other langcodes: preset-exploration / preset-wildernesssurvival. Use /gamemode creative once in-world.
 #>
 [CmdletBinding()]

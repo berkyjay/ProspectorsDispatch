@@ -1,178 +1,247 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json.Linq;
+using Vintagestory.API.Datastructures;
 using Vintagestory.API.Server;
 using Vintagestory.ServerMods;
 
 namespace ProspectorsDispatch;
 
 /// <summary>
-/// The result of sampling the ore-abundance map for one resource around an origin point:
-/// the direction and distance to the highest concentration found within the search radius.
+/// Reads Vintage Story's seeded ore-abundance maps to find, for a resource, the direction and distance
+/// to its strongest concentration near an origin.
 /// </summary>
-public struct OreReading
+/// <remarks>
+/// Works for unexplored land: it calls <see cref="MapLayerBase.GenLayer"/> on each deposit's
+/// <c>OreMapLayer</c>, which regenerates the same seeded noise worldgen uses for
+/// <c>mapRegion.OreMaps</c>. <c>DepositVariant.GetOreMapFactor</c> is not used because it reads the
+/// cached per-region map and returns 0 for regions that have not been generated yet.
+/// Server side only, since the deposit system lives on the server.
+/// </remarks>
+public sealed class OreMapSampler
 {
-    /// <summary>False if the resource has no ore map or no concentration was found in range.</summary>
-    public bool Found;
+    // Blocks per ore-map cell (16 in 1.22).
+    private readonly int _oreMapScale = TerraGenConfig.oreMapScale;
 
-    /// <summary>Compass octant toward the peak: 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW.</summary>
-    public int OctantIndex;
+    private GenDeposits? _genDeposits;
+    private readonly Dictionary<string, VeinSize> _veinByCode = new();
+    private readonly Dictionary<string, ResourceCategory> _categoryByCode = new();
 
-    /// <summary>Bearing toward the peak in degrees, clockwise from north (0=N, 90=E).</summary>
-    public double BearingDeg;
+    // Primer data: for each ore code, the rocks that host it, and the rocks where its top
+    // "bountiful" grade can form.
+    private readonly Dictionary<string, HashSet<string>> _hostRocksByCode = new();
+    private readonly Dictionary<string, HashSet<string>> _bountifulRocksByCode = new();
 
-    /// <summary>Straight-line distance in blocks from the origin to the nearest peak cell.</summary>
-    public double DistanceBlocks;
-
-    public static readonly OreReading None = new OreReading { Found = false };
-}
-
-/// <summary>How large each deposit blob is, derived from the deposit's worldgen radius.avg.</summary>
-public enum VeinSize
-{
-    Scattered, // tiny isolated pockets (e.g. diamond, radius ~2)
-    Small,
-    Sizable,
-    Large      // big masses (e.g. iron, radius ~26)
-}
-
-/// <summary>
-/// Samples Vintage Story's deterministic worldgen ore-abundance maps to locate, for a given
-/// resource, the direction and distance to the highest concentration within a radius of an origin.
-///
-/// Works for completely unexplored regions: it regenerates the same seeded noise that worldgen
-/// uses to populate <c>mapRegion.OreMaps</c>, by calling <see cref="MapLayerBase.GenLayer"/>
-/// directly on each deposit's <c>OreMapLayer</c>. (We deliberately do NOT use
-/// <c>DepositVariant.GetOreMapFactor</c>, which reads the cached per-region map and returns 0 for
-/// regions that have not been generated yet.)
-///
-/// Server-side only - the deposit/worldgen systems live on the server.
-/// </summary>
-public class OreMapSampler
-{
-    // Blocks per ore-map cell (TerraGenConfig.oreMapScale == 16 in 1.22). The absolute ore-map
-    // cell coordinate of a block is simply blockCoord / oreMapScale.
-    private readonly int oreMapScale = TerraGenConfig.oreMapScale;
-
-    private GenDeposits? genDeposits;
-    private readonly Dictionary<string, VeinSize> veinByCode = new();
-    private readonly Dictionary<string, ResourceCategory> categoryByCode = new();
-
-    // Scatter lore (for the prospector's primer): per ore code, which rock types actively host it
-    // (deposit variants with TriesPerChunk > 0), and in which rocks the top "bountiful" grade can form.
-    private readonly Dictionary<string, HashSet<string>> hostRocksByCode = new();
-    private readonly Dictionary<string, HashSet<string>> bountifulRocksByCode = new();
+    /// <summary>True once the deposit system is available.</summary>
+    public bool Ready => _genDeposits?.Deposits != null;
 
     public void Init(ICoreServerAPI api)
     {
-        genDeposits = api.ModLoader.GetModSystem<GenDeposits>();
+        _genDeposits = api.ModLoader.GetModSystem<GenDeposits>();
         RecordDeposits();
     }
 
-    /// <summary>True once the deposit system is available and initialized.</summary>
-    public bool Ready => genDeposits?.Deposits != null;
-
-    /// <summary>The (static, data-derived) vein size of a resource, or null if unknown.</summary>
-    public VeinSize? VeinSizeOf(string code) => veinByCode.TryGetValue(code, out var v) ? v : null;
+    /// <summary>The vein size of a resource, or null if its deposit has no radius.</summary>
+    public VeinSize? VeinSizeOf(string code) => _veinByCode.TryGetValue(code, out var size) ? size : null;
 
     /// <summary>
-    /// Resources discovered at runtime that fall into the given dispatch category. Driven by the
-    /// deposits actually present, so ores added by other mods are covered automatically (categorized
-    /// from their worldgen folder; see <see cref="ResourceCatalog.CategoryOf"/>).
+    /// The resources in a dispatch category. Built from the deposits actually loaded, so ores added by
+    /// other mods are included (see <see cref="ResourceCatalog.CategoryOf"/>).
     /// </summary>
     public IEnumerable<string> CodesInCategory(ResourceCategory category)
     {
-        foreach (var kv in categoryByCode)
-            if (kv.Value == category) yield return kv.Key;
-    }
-
-    // One pass over every ore-map deposit, recording per resource code: (a) its dispatch category and
-    // (b) its vein size, derived from the deposit's worldgen radius.avg (iron radius ~26 = large masses
-    // vs diamond ~2 = scattered specks - honest real data, unlike rarity). Category is recorded even
-    // when a deposit carries no radius, so such a resource is still offered. First deposit per code wins.
-    private void RecordDeposits()
-    {
-        veinByCode.Clear();
-        categoryByCode.Clear();
-        var deposits = genDeposits?.Deposits;
-        if (deposits == null) return;
-        foreach (var dep in deposits)
+        foreach (var pair in _categoryByCode)
         {
-            Record(dep, dep.fromFile);
-            if (dep.ChildDeposits == null) continue;
-            // Child deposits are defined inline in the parent's file, so inherit its source path.
-            foreach (var child in dep.ChildDeposits) Record(child, dep.fromFile);
+            if (pair.Value == category) yield return pair.Key;
         }
     }
 
     /// <summary>
-    /// The rocks that actively host an ore's scatter/vein deposits, and (second set) the rocks where its
-    /// top "bountiful" grade can form. Ordered lists for stable rendering. Empty when unknown.
+    /// The rocks that host an ore, sorted, and the subset where its bountiful grade can form.
+    /// Both are empty when unknown.
     /// </summary>
     public (List<string> Rocks, HashSet<string> Bountiful) HostRocksOf(string code)
     {
-        var rocks = hostRocksByCode.TryGetValue(code, out var r) ? r.OrderBy(x => x).ToList() : new List<string>();
-        var bounty = bountifulRocksByCode.TryGetValue(code, out var b) ? b : new HashSet<string>();
-        return (rocks, bounty);
+        var rocks = _hostRocksByCode.TryGetValue(code, out var hosts) ? hosts.OrderBy(x => x).ToList() : new List<string>();
+        var bountiful = _bountifulRocksByCode.TryGetValue(code, out var rich) ? rich : new HashSet<string>();
+        return (rocks, bountiful);
     }
 
-    /// <summary>All ore codes with recorded host-rock lore, i.e. everything the primer can speak of.</summary>
-    public IEnumerable<string> ScatterLoreCodes() => hostRocksByCode.Keys;
+    /// <summary>Every ore code with host-rock data, which is everything the primer can describe.</summary>
+    public IEnumerable<string> ScatterLoreCodes() => _hostRocksByCode.Keys;
 
-    private void Record(DepositVariant dep, string? sourceFile)
+    /// <summary>
+    /// Finds the strongest ore-map concentration of <paramref name="oreCode"/> within
+    /// <paramref name="radiusBlocks"/> of the origin and returns the direction and distance to it.
+    /// </summary>
+    public OreReading Sample(string oreCode, int originX, int originZ, int radiusBlocks)
     {
-        RecordScatterLore(dep);
-        if (!dep.WithOreMap || dep.Code == null) return;
+        var deposit = FindDeposit(oreCode);
+        if (deposit?.OreMapLayer == null) return OreReading.None;
 
-        if (!categoryByCode.ContainsKey(dep.Code))
+        int radiusCells = Math.Max(1, radiusBlocks / _oreMapScale);
+        int originCellX = CompassMath.FloorDiv(originX, _oreMapScale);
+        int originCellZ = CompassMath.FloorDiv(originZ, _oreMapScale);
+        int minCellX = originCellX - radiusCells;
+        int minCellZ = originCellZ - radiusCells;
+        int size = radiusCells * 2 + 1;
+
+        // One noise tile covering the search square, row-major by z. The low byte of
+        // noise[cz * size + cx] is the abundance (0 to 255) at cell (minCellX + cx, minCellZ + cz).
+        int[] noise = deposit.OreMapLayer.GenLayer(minCellX, minCellZ, size, size);
+
+        double radiusSq = (double)radiusBlocks * radiusBlocks;
+
+        // First pass: the peak abundance within the radius. Ore maps are high contrast, so the peak is
+        // usually a plateau of many cells at the maximum value.
+        int maxValue = 0;
+        for (int cz = 0; cz < size; cz++)
         {
-            ResourceCategory? category = ResourceCatalog.CategoryOf(dep.Code, dep.fromFile ?? sourceFile);
-            if (category.HasValue) categoryByCode[dep.Code] = category.Value;
+            for (int cx = 0; cx < size; cx++)
+            {
+                double dx = (minCellX + cx) * _oreMapScale + _oreMapScale / 2 - originX;
+                double dz = (minCellZ + cz) * _oreMapScale + _oreMapScale / 2 - originZ;
+                if (dx * dx + dz * dz > radiusSq) continue;
+
+                int value = noise[cz * size + cx] & 0xFF;
+                if (value > maxValue) maxValue = value;
+            }
+        }
+        if (maxValue <= 0) return OreReading.None;
+
+        // Second pass: the peak cell nearest the origin. This avoids a directional bias across the
+        // plateau and points at the closest rich spot.
+        int targetCellX = originCellX, targetCellZ = originCellZ;
+        double bestDistSq = double.MaxValue;
+        for (int cz = 0; cz < size; cz++)
+        {
+            for (int cx = 0; cx < size; cx++)
+            {
+                if ((noise[cz * size + cx] & 0xFF) != maxValue) continue;
+
+                int cellX = minCellX + cx, cellZ = minCellZ + cz;
+                double dx = cellX * _oreMapScale + _oreMapScale / 2 - originX;
+                double dz = cellZ * _oreMapScale + _oreMapScale / 2 - originZ;
+                double distSq = dx * dx + dz * dz;
+                if (distSq > radiusSq || distSq >= bestDistSq) continue;
+
+                bestDistSq = distSq;
+                targetCellX = cellX;
+                targetCellZ = cellZ;
+            }
         }
 
-        if (!veinByCode.ContainsKey(dep.Code) && dep.Attributes != null)
+        double offsetX = targetCellX * _oreMapScale + _oreMapScale / 2 - originX;
+        double offsetZ = targetCellZ * _oreMapScale + _oreMapScale / 2 - originZ;
+        double bearing = CompassMath.Bearing(offsetX, offsetZ);
+
+        return new OreReading
         {
-            float radiusAvg = dep.Attributes["radius"]["avg"].AsFloat(0f);
-            if (radiusAvg > 0f) veinByCode[dep.Code] = ClassifyVein(radiusAvg);
+            Found = true,
+            OctantIndex = CompassMath.Octant(bearing),
+            BearingDeg = bearing,
+            DistanceBlocks = Math.Sqrt(offsetX * offsetX + offsetZ * offsetZ)
+        };
+    }
+
+    // Records each resource's dispatch category and vein size from the ore-map deposits, plus the
+    // primer's host-rock data from every deposit. The first deposit seen for a code wins.
+    private void RecordDeposits()
+    {
+        _veinByCode.Clear();
+        _categoryByCode.Clear();
+
+        var deposits = _genDeposits?.Deposits;
+        if (deposits == null) return;
+
+        foreach (var deposit in deposits)
+        {
+            Record(deposit, deposit.fromFile);
+            if (deposit.ChildDeposits == null) continue;
+
+            // Child deposits are defined inside the parent's file.
+            foreach (var child in deposit.ChildDeposits) Record(child, deposit.fromFile);
         }
     }
 
-    // Collect "which rocks host this ore" from every deposit variant that actually places blocks
-    // (TriesPerChunk > 0) inside rock. This is what the prospector's primer sells: under Interesting
-    // Ore Gen the scattered ore carries no location signal, but its host-rock preferences - including
-    // which rocks allow the top "bountiful" grade - are real, readable worldgen data.
-    private void RecordScatterLore(DepositVariant dep)
+    private void Record(DepositVariant deposit, string? sourceFile)
     {
-        if (dep.Code == null || dep.Attributes == null || dep.TriesPerChunk <= 0f) return;
+        RecordScatterLore(deposit);
+        if (!deposit.WithOreMap || deposit.Code == null) return;
 
-        var inblock = dep.Attributes["inblock"];
-        if (!(inblock?["code"].AsString("") ?? "").StartsWith("rock")) return;
+        if (!_categoryByCode.ContainsKey(deposit.Code))
+        {
+            ResourceCategory? category = ResourceCatalog.CategoryOf(deposit.Code, deposit.fromFile ?? sourceFile);
+            if (category.HasValue) _categoryByCode[deposit.Code] = category.Value;
+        }
 
-        var variants = inblock!["allowedVariants"];
+        // Vein size comes from the deposit's radius.avg (iron is about 26, diamond about 2). A deposit
+        // without a radius is still offered, just without a vein size.
+        if (!_veinByCode.ContainsKey(deposit.Code) && deposit.Attributes != null)
+        {
+            float radiusAvg = deposit.Attributes["radius"]["avg"].AsFloat(0f);
+            if (radiusAvg > 0f) _veinByCode[deposit.Code] = ClassifyVein(radiusAvg);
+        }
+    }
+
+    // Collects which rocks host each ore, from every deposit variant that places blocks inside rock
+    // (TriesPerChunk > 0). Under Interesting Ore Gen 2.x the scattered ore has no location to point
+    // at, but its host rocks, including where the bountiful grade forms, are readable worldgen data.
+    private void RecordScatterLore(DepositVariant deposit)
+    {
+        if (deposit.Code == null || deposit.Attributes == null || deposit.TriesPerChunk <= 0f) return;
+
+        var inBlock = deposit.Attributes["inblock"];
+        if (!(inBlock?["code"].AsString("") ?? "").StartsWith("rock")) return;
+
+        var variants = inBlock!["allowedVariants"];
         if (variants == null || !variants.Exists) return;
 
-        if (!hostRocksByCode.TryGetValue(dep.Code, out var rocks))
-            hostRocksByCode[dep.Code] = rocks = new HashSet<string>();
-        foreach (var v in variants.AsArray() ?? Array.Empty<Vintagestory.API.Datastructures.JsonObject>())
+        if (!_hostRocksByCode.TryGetValue(deposit.Code, out var rocks))
         {
-            string? rock = v.AsString(null!);
+            _hostRocksByCode[deposit.Code] = rocks = new HashSet<string>();
+        }
+        foreach (var variant in variants.AsArray() ?? Array.Empty<JsonObject>())
+        {
+            string? rock = variant.AsString(null!);
             if (!string.IsNullOrEmpty(rock)) rocks.Add(rock);
         }
 
-        // Rocks whose allowed grade list includes "bountiful" (keys look like "rock-basalt").
-        var byInBlock = dep.Attributes["placeblock"]?["allowedVariantsByInBlock"];
-        if (byInBlock?.Exists == true && byInBlock.Token is Newtonsoft.Json.Linq.JObject obj)
+        // Rocks whose allowed grades include "bountiful". Keys look like "rock-basalt".
+        var gradesByInBlock = deposit.Attributes["placeblock"]?["allowedVariantsByInBlock"];
+        if (gradesByInBlock?.Exists != true || gradesByInBlock.Token is not JObject gradeTable) return;
+
+        foreach (var property in gradeTable.Properties())
         {
-            foreach (var prop in obj.Properties())
+            if (property.Value is not JArray grades) continue;
+            if (!grades.Any(grade => (string?)grade == "bountiful")) continue;
+
+            string rock = property.Name.StartsWith("rock-") ? property.Name.Substring(5) : property.Name;
+            if (!_bountifulRocksByCode.TryGetValue(deposit.Code, out var bountiful))
             {
-                if (prop.Value is not Newtonsoft.Json.Linq.JArray grades) continue;
-                if (!grades.Any(g => (string?)g == "bountiful")) continue;
-                string rock = prop.Name.StartsWith("rock-") ? prop.Name.Substring(5) : prop.Name;
-                if (!bountifulRocksByCode.TryGetValue(dep.Code, out var bounty))
-                    bountifulRocksByCode[dep.Code] = bounty = new HashSet<string>();
-                bounty.Add(rock);
+                _bountifulRocksByCode[deposit.Code] = bountiful = new HashSet<string>();
+            }
+            bountiful.Add(rock);
+        }
+    }
+
+    private DepositVariant? FindDeposit(string oreCode)
+    {
+        var deposits = _genDeposits?.Deposits;
+        if (deposits == null) return null;
+
+        foreach (var deposit in deposits)
+        {
+            if (deposit.WithOreMap && deposit.Code == oreCode) return deposit;
+            if (deposit.ChildDeposits == null) continue;
+
+            foreach (var child in deposit.ChildDeposits)
+            {
+                if (child.WithOreMap && child.Code == oreCode) return child;
             }
         }
+        return null;
     }
 
     private static VeinSize ClassifyVein(float radiusAvg)
@@ -181,135 +250,5 @@ public class OreMapSampler
         if (radiusAvg < 6f) return VeinSize.Small;
         if (radiusAvg < 12f) return VeinSize.Sizable;
         return VeinSize.Large;
-    }
-
-    /// <summary>
-    /// Every deposit code that has an ore map, i.e. the set of resources we can guide players to
-    /// (and the natural set a trader could offer). Includes child deposits.
-    /// </summary>
-    public List<string> GuidableOreCodes()
-    {
-        var codes = new List<string>();
-        var seen = new HashSet<string>();
-        var deposits = genDeposits?.Deposits;
-        if (deposits == null) return codes;
-
-        // Dedupe by code: an ore can have several withOreMap deposit variants (e.g. a normal and a
-        // rare "massive" bedded deposit), but they share one ore map per code, so one entry suffices.
-        foreach (var dep in deposits)
-        {
-            if (dep.WithOreMap && dep.Code != null && seen.Add(dep.Code)) codes.Add(dep.Code);
-            if (dep.ChildDeposits == null) continue;
-            foreach (var child in dep.ChildDeposits)
-            {
-                if (child.WithOreMap && child.Code != null && seen.Add(child.Code)) codes.Add(child.Code);
-            }
-        }
-        return codes;
-    }
-
-    private DepositVariant? FindDeposit(string oreCode)
-    {
-        var deposits = genDeposits?.Deposits;
-        if (deposits == null) return null;
-
-        foreach (var dep in deposits)
-        {
-            if (dep.WithOreMap && dep.Code == oreCode) return dep;
-            if (dep.ChildDeposits == null) continue;
-            foreach (var child in dep.ChildDeposits)
-            {
-                if (child.WithOreMap && child.Code == oreCode) return child;
-            }
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Finds the highest ore-map concentration of <paramref name="oreCode"/> within
-    /// <paramref name="radiusBlocks"/> of (<paramref name="originX"/>, <paramref name="originZ"/>)
-    /// and returns the direction, distance and peak abundance toward it.
-    /// </summary>
-    public OreReading Sample(string oreCode, int originX, int originZ, int radiusBlocks)
-    {
-        var dep = FindDeposit(oreCode);
-        if (dep?.OreMapLayer == null) return OreReading.None;
-
-        int radiusCells = Math.Max(1, radiusBlocks / oreMapScale);
-        int originCellX = FloorDiv(originX, oreMapScale);
-        int originCellZ = FloorDiv(originZ, oreMapScale);
-        int minCellX = originCellX - radiusCells;
-        int minCellZ = originCellZ - radiusCells;
-        int size = radiusCells * 2 + 1;
-
-        // One deterministic noise tile covering the whole search square. Layout is row-major by z:
-        // noise[cz * size + cx] is the abundance (low byte, 0..255) at cell (minCellX+cx, minCellZ+cz).
-        int[] noise = dep.OreMapLayer.GenLayer(minCellX, minCellZ, size, size);
-
-        double radiusSq = (double)radiusBlocks * radiusBlocks;
-
-        // Pass 1: peak abundance among in-radius cells. The ore map is high-contrast (cells sit near
-        // 0 or near 255), so the peak is usually a plateau of many max-valued cells.
-        int maxVal = 0;
-        for (int cz = 0; cz < size; cz++)
-        {
-            for (int cx = 0; cx < size; cx++)
-            {
-                double ddx = (minCellX + cx) * oreMapScale + oreMapScale / 2 - originX;
-                double ddz = (minCellZ + cz) * oreMapScale + oreMapScale / 2 - originZ;
-                if (ddx * ddx + ddz * ddz > radiusSq) continue;
-                int v = noise[cz * size + cx] & 0xFF;
-                if (v > maxVal) maxVal = v;
-            }
-        }
-        if (maxVal <= 0) return OreReading.None;
-
-        // Pass 2: among the peak-valued cells, target the one NEAREST the origin. Picking nearest
-        // (rather than first-in-iteration-order) both avoids a directional bias over the plateau and
-        // points the player at the closest rich spot - the intuitive thing to travel toward.
-        int targetCellX = originCellX, targetCellZ = originCellZ;
-        double bestDistSq = double.MaxValue;
-        for (int cz = 0; cz < size; cz++)
-        {
-            for (int cx = 0; cx < size; cx++)
-            {
-                if ((noise[cz * size + cx] & 0xFF) != maxVal) continue;
-                int cellX = minCellX + cx, cellZ = minCellZ + cz;
-                double ddx = cellX * oreMapScale + oreMapScale / 2 - originX;
-                double ddz = cellZ * oreMapScale + oreMapScale / 2 - originZ;
-                double d2 = ddx * ddx + ddz * ddz;
-                if (d2 > radiusSq || d2 >= bestDistSq) continue;
-                bestDistSq = d2;
-                targetCellX = cellX;
-                targetCellZ = cellZ;
-            }
-        }
-
-        int peakX = targetCellX * oreMapScale + oreMapScale / 2;
-        int peakZ = targetCellZ * oreMapScale + oreMapScale / 2;
-        double dx = peakX - originX;
-        double dz = peakZ - originZ;
-        double dist = Math.Sqrt(dx * dx + dz * dz);
-
-        // Vintage Story compass: north = -Z, east = +X. Bearing measured clockwise from north.
-        double bearing = Math.Atan2(dx, -dz) * (180.0 / Math.PI);
-        if (bearing < 0) bearing += 360.0;
-        int octant = ((int)Math.Round(bearing / 45.0)) % 8;
-
-        return new OreReading
-        {
-            Found = true,
-            OctantIndex = octant,
-            BearingDeg = bearing,
-            DistanceBlocks = dist
-        };
-    }
-
-    /// <summary>Integer floor division (handles negative world coordinates correctly).</summary>
-    private static int FloorDiv(int a, int b)
-    {
-        int q = a / b;
-        if (a % b != 0 && (a < 0) != (b < 0)) q--;
-        return q;
     }
 }
